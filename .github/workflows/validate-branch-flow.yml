@@ -1,0 +1,76 @@
+name: Validate Branch Flow
+
+on:
+  pull_request:
+    branches:
+      - master
+      - deployment/production
+  push:
+    branches:
+      - deployment/production
+
+jobs:
+  validate-deployment-source:
+    name: Check deployment/production divergence
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/deployment/production' || github.base_ref == 'deployment/production'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify deployment/production is behind or equal to master
+        run: |
+          git fetch origin master:master
+          AHEAD=$(git rev-list --count origin/deployment/production ^master 2>/dev/null || echo "0")
+
+          if [ "$AHEAD" -gt 0 ]; then
+            echo "❌ ERROR: deployment/production is $AHEAD commits ahead of master"
+            echo ""
+            echo "This violates the deployment flow:"
+            echo "  feature/* → master → deployment/production"
+            echo ""
+            echo "deployment/production should NEVER have commits that master doesn't have."
+            echo ""
+            echo "Required action:"
+            echo "1. Cherry-pick commits back to master, OR"
+            echo "2. Reset deployment/production to master"
+            echo ""
+            echo "See: .claude/emergency-hotfix-procedure.md"
+            exit 1
+          fi
+
+          echo "✅ deployment/production is properly aligned with master"
+
+  validate-branch-flow:
+    name: Check merge source branch
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Validate PR source branch
+        run: |
+          BASE_BRANCH="${{ github.base_ref }}"
+          HEAD_BRANCH="${{ github.head_ref }}"
+
+          echo "Pull Request: $HEAD_BRANCH → $BASE_BRANCH"
+          echo ""
+
+          # deployment/production へのマージは master からのみ許可
+          if [ "$BASE_BRANCH" = "deployment/production" ]; then
+            if [ "$HEAD_BRANCH" != "master" ]; then
+              echo "❌ ERROR: Cannot merge $HEAD_BRANCH into deployment/production"
+              echo ""
+              echo "Only master can be merged to deployment/production."
+              echo ""
+              echo "Current attempt: $HEAD_BRANCH → deployment/production (FORBIDDEN)"
+              echo "Required flow:   master → deployment/production"
+              echo ""
+              echo "See: .claude/emergency-hotfix-procedure.md"
+              exit 1
+            fi
+          fi
+
+          echo "✅ Branch flow is valid: $HEAD_BRANCH → $BASE_BRANCH"
